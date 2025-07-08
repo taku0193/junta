@@ -3,7 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MediaPipe Pose Estimation</title>
+    <title>Client-Side Pose Estimation with MediaPipe</title>
+    <!-- MediaPipeと描画ライブラリをCDNから読み込む -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
@@ -15,151 +20,88 @@
             margin: 0;
             background-color: #f0f2f5;
         }
-        h1 {
-            color: #333;
-            margin-bottom: 20px;
-        }
         .container {
             position: relative;
-            width: 640px;
-            height: 480px;
+            width: 80vw;
+            max-width: 960px;
+            aspect-ratio: 16 / 9;
             border-radius: 12px;
             overflow: hidden;
             box-shadow: 0 8px 16px rgba(0,0,0,0.1);
-            background-color: #000;
         }
-        video, canvas {
+        .output_canvas {
             position: absolute;
             top: 0;
             left: 0;
             width: 100%;
             height: 100%;
-            /* 映像を左右反転させる */
-            transform: scaleX(-1); 
-        }
-        #status {
-            margin-top: 15px;
-            color: #666;
-            font-size: 1rem;
-            min-height: 1.2em;
         }
     </style>
-    <!-- Socket.IO client library -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
 </head>
 <body>
-    <h1>リアルタイム姿勢推定 (Real-time Pose Estimation)</h1>
+    <h1>ブラウザ完結型 リアルタイム姿勢推定</h1>
     <div class="container">
-        <!-- カメラ映像を表示するためのvideo要素 -->
-        <video id="video" playsinline autoplay muted></video>
-        <!-- 映像とランドマークを描画するためのcanvas要素 -->
-        <canvas id="canvas"></canvas>
+        <!-- MediaPipeがカメラ入力を受け取るためのvideo要素(非表示) -->
+        <video class="input_video" style="display: none;"></video>
+        <!-- 結果を描画するためのcanvas要素 -->
+        <canvas class="output_canvas"></canvas>
     </div>
-    <div id="status">カメラを初期化中...</div>
 
-    <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            // Socket.IOクライアントの初期化
-            const socket = io();
-            const video = document.getElementById('video');
-            const canvas = document.getElementById('canvas');
-            const context = canvas.getContext('2d');
-            const statusDiv = document.getElementById('status');
+    <script type="module">
+        const videoElement = document.querySelector('.input_video');
+        const canvasElement = document.querySelector('.output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+
+        function onResults(results) {
+            canvasElement.width = results.image.width;
+            canvasElement.height = results.image.height;
+
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
             
-            const FPS = 30; // 1秒あたりにサーバーに送信するフレーム数
+            // 映像を左右反転させて描画
+            canvasCtx.translate(canvasElement.width, 0);
+            canvasCtx.scale(-1, 1);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+            
+            // 座標系を元に戻す
+            canvasCtx.restore();
 
-            // カメラのセットアップ
-            async function setupCamera() {
-                try {
-                    // getUserMediaが利用可能かチェック
-                    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                        throw new Error('お使いのブラウザではカメラ機能がサポートされていません。');
-                    }
-                    
-                    // カメラ映像を取得
-                    const stream = await navigator.mediaDevices.getUserMedia({
-                        video: { width: 640, height: 480 },
-                        audio: false
-                    });
-                    video.srcObject = stream;
-                    
-                    // videoのメタデータが読み込まれたら実行
-                    video.onloadedmetadata = () => {
-                        canvas.width = video.videoWidth;
-                        canvas.height = video.videoHeight;
-                        statusDiv.textContent = '接続完了。姿勢を検出中...';
-                        
-                        // 定期的にフレームをサーバーに送信
-                        setInterval(() => {
-                            sendFrame();
-                        }, 1000 / FPS);
-                    };
-
-                } catch (err) {
-                    console.error("Camera Error:", err);
-                    statusDiv.textContent = `カメラエラー: ${err.message}. ページがHTTPSで読み込まれているか確認してください。`;
-                }
-            }
-
-            // フレームをキャプチャしてサーバーに送信
-            function sendFrame() {
-                // videoの映像をcanvasに描画
-                context.clearRect(0, 0, canvas.width, canvas.height);
-                context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            if (results.poseLandmarks) {
+                // 左右反転した映像の上に正しく描画するために、描画コンテキストを再度反転
+                canvasCtx.save();
+                canvasCtx.translate(canvasElement.width, 0);
+                canvasCtx.scale(-1, 1);
                 
-                // canvasの内容をJPEG形式のBase64文字列に変換
-                const dataURL = canvas.toDataURL('image/jpeg');
+                // MediaPipe標準の描画機能を利用
+                drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS, { color: '#00FF00', lineWidth: 4 });
+                drawLandmarks(canvasCtx, results.poseLandmarks, { color: '#FF0000', radius: 6 });
                 
-                // Socket.IOでサーバーに送信
-                socket.emit('image', dataURL);
+                canvasCtx.restore();
             }
+        }
 
-            // サーバーから姿勢データを受信したときの処理
-            socket.on('pose_data', (data) => {
-                drawLandmarks(data.landmarks);
-            });
-
-            // 受信したランドマークをcanvasに描画
-            function drawLandmarks(landmarks) {
-                // 描画前にcanvasをクリア
-                context.clearRect(0, 0, canvas.width, canvas.height);
-                // 最新のビデオフレームを再描画
-                context.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-                context.fillStyle = '#00FF00'; // 緑色
-                context.strokeStyle = '#FF0000'; // 赤色
-                context.lineWidth = 2;
-
-                // 各ランドマークを円として描画
-                landmarks.forEach(lm => {
-                    if (lm.visibility > 0.5) { // ある程度確信度が高いものだけ描画
-                        context.beginPath();
-                        context.arc(lm.x * canvas.width, lm.y * canvas.height, 5, 0, 2 * Math.PI);
-                        context.fill();
-                    }
-                });
-
-                // ランドマーク間を線で結ぶ（MediaPipeの標準的な接続）
-                const connections = [
-                    [11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24],
-                    [23, 24], [23, 25], [25, 27], [24, 26], [26, 28]
-                ];
-
-                connections.forEach(conn => {
-                    const lm1 = landmarks[conn[0]];
-                    const lm2 = landmarks[conn[1]];
-                    if (lm1.visibility > 0.5 && lm2.visibility > 0.5) {
-                        context.beginPath();
-                        context.moveTo(lm1.x * canvas.width, lm1.y * canvas.height);
-                        context.lineTo(lm2.x * canvas.width, lm2.y * canvas.height);
-                        context.stroke();
-                    }
-                });
-            }
-
-            // 実行開始
-            setupCamera();
+        const pose = new Pose({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
         });
+
+        pose.setOptions({
+            modelComplexity: 1,
+            smoothLandmarks: true,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        pose.onResults(onResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await pose.send({ image: videoElement });
+            },
+            width: 1280,
+            height: 720
+        });
+        camera.start();
     </script>
 </body>
 </html>
